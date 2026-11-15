@@ -27,7 +27,6 @@ export async function requestPasswordReset(formData: FormData) {
   if (email) {
     await auth.api.requestPasswordReset({ body: { email, redirectTo: `${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/reset-password` } }).catch(() => undefined)
   }
-  return { success: true }
 }
 
 export async function resetPassword(token: string, formData: FormData) {

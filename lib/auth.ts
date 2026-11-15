@@ -12,7 +12,9 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     revokeSessionsOnPasswordReset: true,
-    sendResetPassword: async ({ user, url }) => sendPasswordResetEmail(user.email, url),
+    sendResetPassword: async ({ user, url }) => {
+      await sendPasswordResetEmail(user.email, url)
+    },
   },
   user: { additionalFields: { role: { type: 'string', defaultValue: 'resident', input: false } } },
   plugins: [nextCookies()],

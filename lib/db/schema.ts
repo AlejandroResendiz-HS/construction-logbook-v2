@@ -11,6 +11,12 @@ const id = (name: string) => bigint(name, { mode: 'number' }).generatedAlwaysAsI
 export const maintenanceType = pgEnum('maintenance_type_enum', ['preventive', 'corrective'])
 export const maintenanceStatus = pgEnum('maintenance_status_enum', ['pending', 'approved', 'rejected'])
 
+export interface MaintenanceSparePart {
+  description: string
+  quantity: number
+  amount?: number | null
+}
+
 export const machineTypes = pgTable('machine_types', {
   typeCode: text('type_code').primaryKey(), name: text('name').notNull(), description: text('description'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
@@ -60,7 +66,7 @@ export const maintenanceRequests = pgTable('maintenance_requests', {
   maintenanceType: maintenanceType('maintenance_type').notNull(), type: maintenanceType('type').notNull(),
   date: date('date', { mode: 'string' }).defaultNow().notNull(), lastMaintenanceDate: date('last_maintenance_date', { mode: 'string' }),
   nextMaintenanceDate: date('next_maintenance_date', { mode: 'string' }), description: text('description').notNull(),
-  spareParts: jsonb('spare_parts').default([]), status: maintenanceStatus('status').default('pending').notNull(),
+  spareParts: jsonb('spare_parts').$type<MaintenanceSparePart[]>().default([]), status: maintenanceStatus('status').default('pending').notNull(),
   isExternal: boolean('is_external').default(false), cost: numeric('cost', { precision: 12, scale: 2 }).default('0'),
   workedTime: numeric('worked_time', { precision: 10, scale: 2 }).default('0'), downtime: numeric('downtime', { precision: 10, scale: 2 }).default('0'),
   observations: text('observations'), hashId: text('hash_id').notNull().unique(),
