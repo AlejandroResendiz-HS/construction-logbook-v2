@@ -1,0 +1,4 @@
+'use client'
+import { useState } from 'react'
+import { resetPassword } from '@/app/login/actions'
+export default function ResetPasswordForm({ token }: { token: string }) { const [message, setMessage] = useState(''); return <form action={async (formData) => { const result = await resetPassword(token, formData); setMessage(result.error || 'Contraseña actualizada. Ya podés iniciar sesión.') }} className="bg-white p-8 rounded-xl shadow-xl w-full max-w-sm space-y-4"><h1 className="text-2xl font-bold">Nueva contraseña</h1><input className="w-full p-2 border rounded-lg" name="password" type="password" minLength={8} required autoComplete="new-password" />{message ? <p className="text-sm">{message}</p> : null}<button className="w-full py-2 bg-blue-600 text-white rounded-lg">Guardar contraseña</button></form> }

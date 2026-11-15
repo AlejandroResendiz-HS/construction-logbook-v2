@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { login } from '@/app/login/actions'
+import Link from 'next/link'
 
 interface LoginFormProps {
   dict: any
@@ -60,6 +61,7 @@ export default function LoginForm({ dict }: LoginFormProps) {
       >
         {loading ? dict.logging_in : dict.login_button}
       </button>
+      <Link href="/forgot-password" className="block text-center text-sm text-blue-600 hover:underline">Olvidé mi contraseña</Link>
     </form>
   )
 }

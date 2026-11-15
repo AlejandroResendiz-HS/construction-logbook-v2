@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
+import { getDashboardLogs } from '@/app/(app)/logbook/actions'
 import { Download, Search, ChevronDown, Check, Layers, ListFilter, CalendarDays } from 'lucide-react'
 import { startOfWeek, format } from 'date-fns'
 import ExcelJS from 'exceljs'
@@ -54,10 +54,6 @@ export default function AppDashboardClient({ machinery, projects, dict, common }
   useEffect(() => {
     if (projects && projects.length > 0) {
       setProjectList(projects)
-    } else {
-      supabase.from('projects').select('project_id, project_name').order('project_name', { ascending: true }).then(({ data }) => {
-        if (data) setProjectList(data)
-      })
     }
   }, [projects])
 
@@ -125,39 +121,19 @@ export default function AppDashboardClient({ machinery, projects, dict, common }
     }
     
     setLoading(true)
-    let query = supabase
-      .from('machinery_logs')
-      .select(`
-        *,
-        projects(project_name),
-        machinery(machinery_name, machinery_full_name, external_code, is_rented, machine_type, expected_consumption_rate)
-      `)
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
-
-    // Filter by machines if a specific subset is selected
-    if (selectedMachines.length > 0 && selectedMachines.length < machinery.length) {
-      query = query.in('machine_id', selectedMachines)
-    }
-
-    if (selectedProject) {
-      query = query.eq('project_id', selectedProject)
-    }
-
-    const { data, error } = await query.order('date', { ascending: true })
-
-    if (error) {
+    try {
+      const data = await getDashboardLogs({
+        machineIds: selectedMachines.length < machinery.length ? selectedMachines.map(Number) : [],
+        projectId: selectedProject ? Number(selectedProject) : undefined,
+        dateFrom, dateTo,
+      })
+      let filteredData = data || []
+      if (machineType === 'owned') filteredData = filteredData.filter(log => !log.machinery?.is_rented)
+      else if (machineType === 'rented') filteredData = filteredData.filter(log => log.machinery?.is_rented)
+      setLogs(filteredData)
+    } catch (error) {
       console.error(error)
       setLogs([])
-    } else {
-      // Client-side filter for machine type (is_rented)
-      let filteredData = data || []
-      if (machineType === 'owned') {
-        filteredData = filteredData.filter(log => !log.machinery?.is_rented)
-      } else if (machineType === 'rented') {
-        filteredData = filteredData.filter(log => log.machinery?.is_rented)
-      }
-      setLogs(filteredData)
     }
     setLoading(false)
   }

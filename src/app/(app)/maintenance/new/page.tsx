@@ -1,26 +1,13 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireRole } from '@/lib/authorization'
+import { getMachinery, getProjects } from '@/lib/queries'
 import { getDictionary } from '@/lib/i18n'
 import { redirect } from 'next/navigation'
 import MaintenanceRequestForm from '@/components/MaintenanceRequestForm'
 
 export default async function NewMaintenancePage() {
   const dict = getDictionary('es')
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
-  }
-
-  const { data: machinery } = await supabase
-    .from('machinery')
-    .select('machinery_id, machinery_full_name, external_code')
-    .order('machinery_full_name')
-
-  const { data: projects } = await supabase
-    .from('projects')
-    .select('project_id, project_name')
-    .order('project_name')
+  await requireRole('admin', 'resident').catch(() => redirect('/login'))
+  const [machinery, projects] = await Promise.all([getMachinery(), getProjects()])
 
   return (
     <main className="p-4 md:p-8">

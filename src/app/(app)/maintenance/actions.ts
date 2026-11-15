@@ -1,218 +1,68 @@
 'use server'
-
-import { createClient } from '@/lib/supabase/server'
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { and, desc, eq, gt, lte } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
-import { z } from 'zod'
+import { requireRole } from '@/lib/authorization'
+import { db } from '@/lib/db'
+import { files, machinery, machineryLogs, maintenanceRequests } from '@/lib/db/schema'
 import { sendMaintenanceAuthNotification } from '@/lib/notifications'
+import { createOpaqueToken, hashOpaqueToken } from '@/lib/security'
 
-const supabaseAdmin = createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'application/pdf'])
+const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE_BYTES || 4_000_000)
+const fileId = (url: string) => url.match(/^\/api\/files\/([0-9a-f-]{36})$/i)?.[1]
 
-const sparePartSchema = z.object({
-  description: z.string().min(1),
-  quantity: z.number().min(0),
-  amount: z.number().optional().nullable(),
-})
-
-const maintenanceRequestSchema = z.object({
-  machine_id: z.number(),
-  project_id: z.number().optional().nullable(),
-  maintenance_type: z.enum(['preventive', 'corrective']),
-  type: z.enum(['preventive', 'corrective']),
-  date: z.string(),
-  last_maintenance_date: z.string().optional().nullable(),
-  next_maintenance_date: z.string().optional().nullable(),
-  description: z.string().min(1),
-  spare_parts: z.array(sparePartSchema),
-  cost: z.number().optional(),
-  worked_time: z.number().optional(),
-  downtime: z.number().optional(),
-  is_external: z.boolean().optional(),
-  observations: z.string().optional().nullable(),
-  attachments: z.array(z.string()).optional(),
-})
-
-export async function createMaintenanceRequest(formData: FormData, spareParts: any[], attachmentUrls: string[]) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Unauthorized' }
-
-  const rawProjectId = formData.get('project_id') as string
-  const project_id = rawProjectId ? parseInt(rawProjectId) : null
-
-  const rawData = {
-    machine_id: parseInt(formData.get('machine_id') as string),
-    project_id,
-    maintenance_type: formData.get('maintenance_type') as 'preventive' | 'corrective',
-    type: formData.get('maintenance_type') as 'preventive' | 'corrective',
-    date: formData.get('date') as string,
-    last_maintenance_date: formData.get('last_maintenance_date') as string || null,
-    next_maintenance_date: formData.get('next_maintenance_date') as string || null,
-    description: formData.get('description') as string,
-    spare_parts: spareParts,
-    cost: parseFloat(formData.get('cost') as string) || 0,
-    worked_time: parseFloat(formData.get('worked_time') as string) || 0,
-    downtime: parseFloat(formData.get('downtime') as string) || 0,
-    is_external: formData.get('is_external') === 'true',
-    observations: formData.get('observations') as string || null,
-    attachments: attachmentUrls,
-  }
-
-  try {
-    const validatedData = maintenanceRequestSchema.parse(rawData)
-    
-    const { data, error } = await supabase
-      .from('maintenance_requests')
-      .insert([validatedData])
-      .select(`
-        *,
-        machinery(machinery_name)
-      `)
-      .single()
-
-    if (error) {
-      console.error('Error creating maintenance request:', error)
-      return { error: error.message }
-    }
-
-    // Send Notification
-    await sendMaintenanceAuthNotification({
-      hash_id: data.hash_id,
-      machineName: data.machinery?.machinery_name || 'Maquinaria Desconocida',
-      description: data.description,
-    })
-
-    revalidatePath('/maintenance')
-    return { success: true, data }
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return { error: 'Validation failed', details: err.issues }
-    }
-    return { error: 'Internal Server Error' }
-  }
+export async function createMaintenanceRequest(formData: FormData, spareParts: Array<{ description: string; quantity: number; amount?: number | null }>, attachmentUrls: string[]): Promise<{ success?: boolean; error?: string; data?: unknown }> {
+  const session = await requireRole('admin', 'resident')
+  const approvalToken = createOpaqueToken()
+  const approvalTokenHash = hashOpaqueToken(approvalToken)
+  const hashId = createOpaqueToken(18)
+  const machineId = Number(formData.get('machine_id')); const projectId = Number(formData.get('project_id')) || null
+  const [created] = await db.transaction(async (tx) => {
+    const rows = await tx.insert(maintenanceRequests).values({
+      machineId, projectId, maintenanceType: String(formData.get('maintenance_type')) as 'preventive' | 'corrective',
+      type: String(formData.get('maintenance_type')) as 'preventive' | 'corrective', date: String(formData.get('date')),
+      lastMaintenanceDate: String(formData.get('last_maintenance_date') || '') || null, nextMaintenanceDate: String(formData.get('next_maintenance_date') || '') || null,
+      description: String(formData.get('description') || ''), spareParts, cost: String(Number(formData.get('cost')) || 0),
+      workedTime: String(Number(formData.get('worked_time')) || 0), downtime: String(Number(formData.get('downtime')) || 0),
+      isExternal: formData.get('is_external') === 'true', observations: String(formData.get('observations') || '') || null,
+      hashId, approvalTokenHash, approvalTokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    }).returning()
+    const ids = attachmentUrls.map(fileId).filter((id): id is string => Boolean(id))
+    for (const id of ids) await tx.update(files).set({ maintenanceRequestId: rows[0].maintenanceRequestId }).where(and(eq(files.fileId, id), eq(files.ownerUserId, session.user.id), eq(files.purpose, 'maintenance_attachment')))
+    return rows
+  })
+  const [machine] = await db.select({ name: machinery.machineryName }).from(machinery).where(eq(machinery.machineryId, machineId)).limit(1)
+  await sendMaintenanceAuthNotification({ hash_id: approvalToken, machineName: machine?.name || 'Maquinaria Desconocida', description: created.description })
+  revalidatePath('/maintenance'); return { success: true, data: created }
 }
 
-export async function updateMaintenanceStatus(requestId: number, status: 'pending' | 'approved' | 'rejected') {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Unauthorized' }
-
-  const { error } = await supabaseAdmin
-    .from('maintenance_requests')
-    .update({ status })
-    .eq('maintenance_request_id', requestId)
-
-  if (error) {
-    console.error('Error updating status:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/maintenance')
-  return { success: true }
+export async function updateMaintenanceStatus(requestId: number, status: 'pending' | 'approved' | 'rejected'): Promise<{ success?: boolean; error?: string }> {
+  await requireRole('admin'); await db.update(maintenanceRequests).set({ status }).where(eq(maintenanceRequests.maintenanceRequestId, requestId)); revalidatePath('/maintenance'); return { success: true }
 }
-
-export async function updateMaintenanceDetails(
-  requestId: number, 
-  observations: string, 
-  attachments: string[], 
-  projectId?: number | null,
-  date?: string | null,
-  cost?: number | null
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Unauthorized' }
-
-  const updatePayload: Record<string, any> = { observations, attachments }
-  if (projectId !== undefined) {
-    updatePayload.project_id = projectId
-  }
-  if (date !== undefined && date !== null) {
-    updatePayload.date = date
-  }
-  if (cost !== undefined && cost !== null) {
-    updatePayload.cost = cost
-  }
-
-  const { error } = await supabaseAdmin
-    .from('maintenance_requests')
-    .update(updatePayload)
-    .eq('maintenance_request_id', requestId)
-
-  if (error) {
-    console.error('Error updating details:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/maintenance')
-  revalidatePath(`/app/maintenance/${requestId}`)
-  return { success: true }
+export async function updateMaintenanceDetails(requestId: number, observations: string, attachments: string[], projectId?: number | null, date?: string | null, cost?: number | null): Promise<{ success?: boolean; error?: string }> {
+  const session = await requireRole('admin', 'resident')
+  await db.transaction(async (tx) => {
+    await tx.update(maintenanceRequests).set({ observations, projectId: projectId === undefined ? undefined : projectId, date: date || undefined, cost: cost == null ? undefined : String(cost) }).where(eq(maintenanceRequests.maintenanceRequestId, requestId))
+    const ids = attachments.map(fileId).filter((id): id is string => Boolean(id))
+    await tx.update(files).set({ maintenanceRequestId: null }).where(eq(files.maintenanceRequestId, requestId))
+    if (ids.length) for (const id of ids) await tx.update(files).set({ maintenanceRequestId: requestId }).where(and(eq(files.fileId, id), eq(files.ownerUserId, session.user.id)))
+  })
+  revalidatePath('/maintenance'); revalidatePath(`/maintenance/${requestId}`); return { success: true }
 }
-
-export async function getSuggestedProjectForMachine(machineId: number, date: string): Promise<number | null> {
-  const supabase = await createClient()
-  const { data } = await supabase
-    .from('machinery_logs')
-    .select('project_id')
-    .eq('machine_id', machineId)
-    .lte('date', date)
-    .not('project_id', 'is', null)
-    .order('date', { ascending: false })
-    .order('machinery_log_id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  return data?.project_id || null
-}
-
+export async function getSuggestedProjectForMachine(machineId: number, date: string) { await requireRole('admin', 'resident'); const [row] = await db.select({ projectId: machineryLogs.projectId }).from(machineryLogs).where(and(eq(machineryLogs.machineId, machineId), lte(machineryLogs.date, date))).orderBy(desc(machineryLogs.date), desc(machineryLogs.machineryLogId)).limit(1); return row?.projectId || null }
 export async function uploadMaintenanceAttachment(file: File) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Unauthorized')
-
-  const fileExt = file.name.split('.').pop()
-  const fileName = `${Math.random()}-${Date.now()}.${fileExt}`
-  const filePath = `${user.id}/${fileName}`
-
-  const { error: uploadError } = await supabase.storage
-    .from('maintenance_attachments')
-    .upload(filePath, file)
-
-  if (uploadError) {
-    console.error('Upload error:', uploadError)
-    throw uploadError
-  }
-
-  const { data: { publicUrl } } = supabase.storage
-    .from('maintenance_attachments')
-    .getPublicUrl(filePath)
-
-  return publicUrl
+  const session = await requireRole('admin', 'resident')
+  if (!ALLOWED_TYPES.has(file.type)) throw new Error('Tipo de archivo no permitido')
+  if (file.size < 1 || file.size > MAX_FILE_SIZE) throw new Error('El archivo supera el límite permitido')
+  const [stored] = await db.insert(files).values({ ownerUserId: session.user.id, purpose: 'maintenance_attachment', originalFilename: file.name, mimeType: file.type, sizeBytes: file.size, content: Buffer.from(await file.arrayBuffer()) }).returning({ id: files.fileId })
+  return `/api/files/${stored.id}`
 }
+export async function deleteMaintenanceRequest(requestId: number): Promise<{ success?: boolean; error?: string }> { await requireRole('admin'); await db.delete(maintenanceRequests).where(eq(maintenanceRequests.maintenanceRequestId, requestId)); revalidatePath('/maintenance'); return { success: true } }
 
-export async function deleteMaintenanceRequest(requestId: number) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Unauthorized' }
-
-  const role = user?.user_metadata?.role || null
-  if (role !== 'admin') {
-    return { error: 'Forbidden. Solo los administradores pueden eliminar solicitudes de mantenimiento.' }
-  }
-
-  const { error } = await supabaseAdmin
-    .from('maintenance_requests')
-    .delete()
-    .eq('maintenance_request_id', requestId)
-
-  if (error) {
-    console.error('Error deleting maintenance request:', error)
-    return { error: error.message }
-  }
-
-  revalidatePath('/maintenance')
-  return { success: true }
+export async function approveMaintenanceByToken(token: string, action: 'approve' | 'reject') {
+  const tokenHash = hashOpaqueToken(token)
+  const status = action === 'approve' ? 'approved' : 'rejected'
+  const updated = await db.update(maintenanceRequests).set({ status, approvalTokenHash: null, approvalTokenExpiresAt: null })
+    .where(and(eq(maintenanceRequests.approvalTokenHash, tokenHash), eq(maintenanceRequests.status, 'pending'), gt(maintenanceRequests.approvalTokenExpiresAt, new Date()))).returning({ id: maintenanceRequests.maintenanceRequestId })
+  return updated.length ? { success: true, status } : { error: 'El enlace es inválido, expiró o ya fue utilizado.' }
 }

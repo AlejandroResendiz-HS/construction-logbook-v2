@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { supabase } from '@/lib/supabase'
+import { listDepreciations, saveDepreciation } from '@/app/(app)/machinery_depreciation/actions'
 
 interface DepreciationInfo {
   machinery_id: number
@@ -23,42 +23,18 @@ export const useMachineryDepreciationStore = create<MachineryDepreciationState>(
   loading: false,
   fetchDepreciations: async () => {
     set({ loading: true })
-    const { data, error } = await supabase
-      .from('machinery_depreciation')
-      .select(`
-        *,
-        machinery:machinery_id (
-          machinery_full_name,
-          external_code,
-          is_rented
-        )
-      `)
-    
-    if (error) {
+    try {
+      const data = await listDepreciations()
+      set({ depreciations: data || [], loading: false })
+    } catch (error) {
       console.error('Error fetching depreciations:', error)
       set({ loading: false })
-      return
     }
-
-    set({ depreciations: data || [], loading: false })
   },
   upsertDepreciation: async (depr) => {
-    const { data, error } = await supabase
-      .from('machinery_depreciation')
-      .upsert(depr)
-      .select(`
-        *,
-        machinery:machinery_id (
-          machinery_full_name,
-          external_code,
-          is_rented
-        )
-      `)
-      .single()
-
-    if (error) {
-      return { success: false, error }
-    }
+    let data
+    try { data = await saveDepreciation(depr) } catch (error) { return { success: false, error } }
+    if (!data) return { success: false, error: 'Not found' }
 
     set((state) => {
       const exists = state.depreciations.some(d => d.machinery_id === depr.machinery_id)

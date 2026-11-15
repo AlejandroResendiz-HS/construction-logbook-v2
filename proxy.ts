@@ -1,8 +1,13 @@
 import { type NextRequest } from 'next/server'
-import { updateSession } from '@/lib/supabase/middleware'
+import { NextResponse } from 'next/server'
+import { getSessionCookie } from 'better-auth/cookies'
 
 export async function proxy(request: NextRequest) {
-  return await updateSession(request)
+  const protectedPath = /^\/(dashboard|logbook|log\/correct|maintenance(?:\/new|\/\d+)?|projects|machinery|machinery_cost|machinery_depreciation|settings)(?:\/|$)/.test(request.nextUrl.pathname)
+  if (protectedPath && !getSessionCookie(request)) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+  return NextResponse.next()
 }
 
 // Adding default export as well to ensure compatibility

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { supabase } from '@/lib/supabase'
+import { listMachinery } from '@/app/(app)/machinery/actions'
 
 interface MachineryState {
   machinery: any[]
@@ -15,11 +15,8 @@ export const useMachineryStore = create<MachineryState>((set) => ({
   loading: false,
   fetchMachinery: async () => {
     set({ loading: true })
-    const { data } = await supabase
-      .from('machinery')
-      .select('*')
-      .order('machinery_full_name', { ascending: true })
-    set({ machinery: data || [], loading: false })
+    const data = await listMachinery()
+    set({ machinery: data, loading: false })
   },
   addMachine: (machine) => 
     set((state) => ({ 

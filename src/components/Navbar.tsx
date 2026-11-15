@@ -1,37 +1,22 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Menu, X, Hammer, ShieldCheck, Settings, LogOut } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
 import LogoutButton from './LogoutButton'
 
 interface NavbarProps {
   dict: any
+  initialUser: { id: string } | null
+  initialRole: string | null
 }
 
-export default function Navbar({ dict }: NavbarProps) {
+export default function Navbar({ dict, initialUser, initialRole }: NavbarProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const [user, setUser] = useState<any>(null)
-  const [role, setRole] = useState<string | null>(null)
+  const user = initialUser
+  const role = initialRole
   const pathname = usePathname()
-
-  useEffect(() => {
-    const getSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      setUser(session?.user ?? null)
-      setRole(session?.user?.user_metadata?.role ?? null)
-    }
-
-    getSession()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-      setRole(session?.user?.user_metadata?.role ?? null)
-    })
-    return () => subscription.unsubscribe()
-  }, [])
 
   const isAdminRoute = pathname.startsWith('/dashboard') || pathname.startsWith('/machinery') || pathname.startsWith('/maintenance') || pathname.startsWith('/projects') || pathname.startsWith('/logbook') || pathname.startsWith('/settings')
   

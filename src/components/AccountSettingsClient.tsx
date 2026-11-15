@@ -1,25 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { changePassword, uploadAvatar } from '@/app/(app)/settings/actions'
 import { User, Loader2, Upload } from 'lucide-react'
 
 interface AccountSettingsClientProps {
   initialAvatarUrl: string | null
-  userId: string
-  userEmail: string
   dict: any
 }
 
 export default function AccountSettingsClient({
   initialAvatarUrl,
-  userId,
-  userEmail,
   dict,
 }: AccountSettingsClientProps) {
   // ── Shared state ──────────────────────────────────────────────────────────
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatarUrl)
-  const [avatarCacheBuster, setAvatarCacheBuster] = useState<number>(Date.now())
+  const [avatarCacheBuster, setAvatarCacheBuster] = useState(0)
 
   // ── Section A: Profile Picture ────────────────────────────────────────────
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
@@ -46,48 +42,13 @@ export default function AccountSettingsClient({
 
     setAvatarLoading(true)
 
-    // Deterministic path — scoped by user UUID; upsert always overwrites the same file
-    const path = `${userId}/avatar`
-
-    const { error: uploadError } = await supabase.storage
-      .from('avatars')
-      .upload(path, avatarFile, { upsert: true, contentType: avatarFile.type })
-
-    if (uploadError) {
-      setAvatarError(uploadError.message)
+    const result = await uploadAvatar(avatarFile)
+    if (result.error || !result.url) {
+      setAvatarError(result.error || 'Error al guardar la imagen.')
       setAvatarLoading(false)
       return
     }
-
-    // Persist path in public.profiles table
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .upsert(
-        {
-          user_id: userId,
-          avatar_path: path,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'user_id' }
-      )
-
-    if (profileError) {
-      setAvatarError('Error al guardar el perfil: ' + profileError.message)
-      setAvatarLoading(false)
-      return
-    }
-
-    const { data: signedData, error: signedError } = await supabase.storage
-      .from('avatars')
-      .createSignedUrl(path, 3600)
-
-    if (signedError || !signedData?.signedUrl) {
-      setAvatarError('Error al generar la URL de la imagen.')
-      setAvatarLoading(false)
-      return
-    }
-
-    const newSignedUrl = signedData.signedUrl
+    const newSignedUrl = result.url
     setAvatarUrl(newSignedUrl)
     setAvatarCacheBuster(Date.now())
     setAvatarSuccess(true)
@@ -127,25 +88,9 @@ export default function AccountSettingsClient({
 
     setPasswordLoading(true)
 
-    // Reauthenticate with current password
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: userEmail,
-      password: currentPassword,
-    })
-
-    if (signInError) {
-      setPasswordError('La contraseña actual es incorrecta.')
-      setPasswordLoading(false)
-      return
-    }
-
-    // Update to new password
-    const { error: updateError } = await supabase.auth.updateUser({
-      password: newPassword,
-    })
-
-    if (updateError) {
-      setPasswordError(updateError.message)
+    const result = await changePassword(currentPassword, newPassword)
+    if (result.error) {
+      setPasswordError(result.error)
       setPasswordLoading(false)
       return
     }
@@ -155,15 +100,6 @@ export default function AccountSettingsClient({
     setNewPassword('')
     setConfirmPassword('')
     setPasswordLoading(false)
-
-    // Sign out and redirect
-    const { error: signOutError } = await supabase.auth.signOut()
-    if (signOutError) {
-      setPasswordError(
-        'Contraseña actualizada, pero no se pudo cerrar sesión. Por favor cierra sesión manualmente.'
-      )
-      return
-    }
 
     window.location.href = '/login'
   }

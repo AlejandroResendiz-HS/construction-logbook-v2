@@ -1,73 +1,24 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { and, eq, gte, lte } from 'drizzle-orm'
+import { requireRole } from '@/lib/authorization'
+import { db } from '@/lib/db'
+import { machineryDepreciation, machineryLogs, maintenanceRequests, projects } from '@/lib/db/schema'
+import { getMachinery, getProjects } from '@/lib/queries'
 
 export async function getMachineryCostData(dateFrom?: string, dateTo?: string, projectId?: number) {
-  const supabase = await createClient()
-
-  // 0. Fetch all projects for dropdowns
-  const { data: allProjects } = await supabase
-    .from('projects')
-    .select('project_id, project_name')
-    .order('project_name', { ascending: true })
-
-  // 1. Fetch machinery joined with depreciation
-  const { data: machines, error: machError } = await supabase
-    .from('machinery')
-    .select(`
-      machinery_id,
-      machinery_full_name,
-      external_code,
-      is_rented,
-      machine_type,
-      expected_consumption_rate,
-      machinery_depreciation (
-        optimal_fuel_consumption,
-        service_life,
-        purchase_value,
-        rescue_value,
-        estimated_depreciation_rate
-      )
-    `)
-
-  if (machError) {
-    console.error('Error fetching machines:', machError)
-    return { error: machError.message }
-  }
-
-  // 2. Fetch all completed logs for aggregation
-  let logsQuery = supabase
-    .from('machinery_logs')
-    .select('machine_id, project_id, start_time, end_time, fuel_liters, fuel_price, effective_hours, projects(project_name)')
-    .eq('is_completed', true)
-
-  if (dateFrom) logsQuery = logsQuery.gte('date', dateFrom)
-  if (dateTo) logsQuery = logsQuery.lte('date', dateTo)
-  if (projectId) logsQuery = logsQuery.eq('project_id', projectId)
-
-  const { data: logs, error: logsError } = await logsQuery
-
-  if (logsError) {
-    console.error('Error fetching logs:', logsError)
-    return { error: logsError.message }
-  }
-
-  // 3. Fetch all approved maintenance requests
-  let maintQuery = supabase
-    .from('maintenance_requests')
-    .select('machine_id, cost, project_id')
-    .eq('status', 'approved')
-
-  if (dateFrom) maintQuery = maintQuery.gte('date', dateFrom)
-  if (dateTo) maintQuery = maintQuery.lte('date', dateTo)
-  if (projectId) maintQuery = maintQuery.eq('project_id', projectId)
-
-  const { data: maintenance, error: maintError } = await maintQuery
-
-  if (maintError) {
-    console.error('Error fetching maintenance:', maintError)
-    return { error: maintError.message }
-  }
+  await requireRole('admin', 'resident')
+  const allProjects = await getProjects()
+  const baseMachines = await getMachinery()
+  const depreciation = await db.select().from(machineryDepreciation)
+  const machines = baseMachines.map((m) => ({ ...m, machinery_depreciation: depreciation.filter((d) => d.machineryId === m.machinery_id).map((d) => ({ optimal_fuel_consumption: d.optimalFuelConsumption, service_life: d.serviceLife, purchase_value: d.purchaseValue, rescue_value: d.rescueValue, estimated_depreciation_rate: d.estimatedDepreciationRate })) }))
+  const logConditions = [eq(machineryLogs.isCompleted, true)]
+  if (dateFrom) logConditions.push(gte(machineryLogs.date, dateFrom)); if (dateTo) logConditions.push(lte(machineryLogs.date, dateTo)); if (projectId) logConditions.push(eq(machineryLogs.projectId, projectId))
+  const logRows = await db.select({ machine_id: machineryLogs.machineId, project_id: machineryLogs.projectId, start_time: machineryLogs.startTime, end_time: machineryLogs.endTime, fuel_liters: machineryLogs.fuelLiters, fuel_price: machineryLogs.fuelPrice, effective_hours: machineryLogs.effectiveHours, project_name: projects.projectName }).from(machineryLogs).innerJoin(projects, eq(machineryLogs.projectId, projects.projectId)).where(and(...logConditions))
+  const logs = logRows.map(({ project_name, ...row }) => ({ ...row, projects: { project_name } }))
+  const maintenanceConditions = [eq(maintenanceRequests.status, 'approved' as const)]
+  if (dateFrom) maintenanceConditions.push(gte(maintenanceRequests.date, dateFrom)); if (dateTo) maintenanceConditions.push(lte(maintenanceRequests.date, dateTo)); if (projectId) maintenanceConditions.push(eq(maintenanceRequests.projectId, projectId))
+  const maintenance = await db.select({ machine_id: maintenanceRequests.machineId, cost: maintenanceRequests.cost, project_id: maintenanceRequests.projectId }).from(maintenanceRequests).where(and(...maintenanceConditions))
 
   // Helper function to calculate hours between two TIME strings (HH:mm:ss)
   const calculateHours = (start: string | null, end: string | null) => {

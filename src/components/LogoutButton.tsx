@@ -1,6 +1,6 @@
 'use client'
 
-import { supabase } from '@/lib/supabase'
+import { logout } from '@/app/login/actions'
 import { LogOut } from 'lucide-react'
 
 interface LogoutButtonProps {
@@ -12,9 +12,7 @@ interface LogoutButtonProps {
 
 export default function LogoutButton({ label, className, iconSize = 16, showIcon = true }: LogoutButtonProps) {
   const handleLogout = async () => {
-    await supabase.auth.signOut()
-    // Hard redirect to clear all memory state and cookies
-    window.location.href = '/'
+    await logout()
   }
 
   return (

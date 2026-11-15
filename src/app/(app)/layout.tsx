@@ -1,33 +1,24 @@
-import { createClient } from '@/lib/supabase/server'
+import { getSession } from '@/lib/authorization'
+import { db } from '@/lib/db'
+import { profiles } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 import { getDictionary } from '@/lib/i18n'
 import AuthSidenav from '@/components/AuthSidenav'
 import { redirect } from 'next/navigation'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const dict = getDictionary('es')
-  const supabase = await createClient()
-  
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
+  const session = await getSession()
+  if (!session) {
     redirect('/login')
   }
 
-  const role = user?.user_metadata?.role || null
+  const role = session.user.role || null
 
   // Fetch avatar path from profile and generate signed URL (safe when profile doesn't exist yet)
   let initialAvatarUrl: string | null = null
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('avatar_path')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (profile?.avatar_path) {
-    const { data: signedData } = await supabase.storage
-      .from('avatars')
-      .createSignedUrl(profile.avatar_path, 3600)
-    initialAvatarUrl = signedData?.signedUrl ?? null
-  }
+  const [profile] = await db.select({ avatarFileId: profiles.avatarFileId }).from(profiles).where(eq(profiles.userId, session.user.id)).limit(1)
+  if (profile?.avatarFileId) initialAvatarUrl = `/api/files/${profile.avatarFileId}`
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col lg:flex-row">

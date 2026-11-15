@@ -1,324 +1,92 @@
 'use server'
 
-import { supabase } from '@/lib/supabase'
+import { and, eq, lt, sql } from 'drizzle-orm'
+import { cookies } from 'next/headers'
+import { db } from '@/lib/db'
+import { machinery, machineryLogs } from '@/lib/db/schema'
+import { createOpaqueToken } from '@/lib/security'
+import { requireRole } from '@/lib/authorization'
+
+const capabilityName = (id: number) => `shift_cap_${id}`
 
 export async function createMachineryLog(formData: FormData) {
-  const machine_id = parseInt(formData.get('machine_id') as string)
-  const project_id = parseInt(formData.get('project_id') as string)
-  const date = (formData.get('date') as string) || new Date().toISOString().split('T')[0]
-  const operator_name = formData.get('operator_name') as string
-  const rawStartTime = formData.get('start_time') as string | null
-  const fuel_liters = parseFloat(formData.get('fuel_liters') as string) || 0
-  const fuel_price = parseFloat(formData.get('fuel_price') as string) || null
-
-  // Fetch machine type and benchmark rate
-  const { data: machine } = await supabase
-    .from('machinery')
-    .select('machine_type, expected_consumption_rate')
-    .eq('machinery_id', machine_id)
-    .single()
-
-  const isMachineType = machine?.machine_type !== 'truck'
-  const rate = Number(machine?.expected_consumption_rate) || 0
-  const effective_hours =
-    isMachineType && rate > 0 && fuel_liters
-      ? Number((fuel_liters / rate).toFixed(2))
-      : null
-
-  // For heavy machines: start_time is omitted/null and shift is marked completed
-  // For trucks: start_time is required and shift starts open
-  const start_time = isMachineType ? null : (rawStartTime || new Date().toTimeString().slice(0, 5))
-  const is_completed = isMachineType ? true : false
-  const status = isMachineType ? 'completed' : 'started'
-
-  const { data, error } = await supabase
-    .from('machinery_logs')
-    .insert([
-      {
-        machine_id,
-        project_id,
-        date,
-        operator_name,
-        start_time,
-        fuel_liters,
-        fuel_price,
-        effective_hours,
-        is_completed,
-        status,
-        pause_events: [],
-        total_paused_minutes: 0,
-      },
-    ])
-    .select('hash_id, machinery_log_id')
-    .single()
-
-  if (error) {
-    console.error('Error creating log:', error)
-    // Fallback if local migration hasn't dropped NOT NULL on start_time yet
-    if (error.code === '23502' && error.message.includes('start_time')) {
-      const retry = await supabase
-        .from('machinery_logs')
-        .insert([
-          {
-            machine_id,
-            project_id,
-            date,
-            operator_name,
-            start_time: '00:00:00',
-            fuel_liters,
-            fuel_price,
-            effective_hours,
-            is_completed,
-            status,
-          },
-        ])
-        .select('hash_id, machinery_log_id')
-        .single()
-
-      if (!retry.error && retry.data) {
-        return { hash_id: retry.data.hash_id, log_id: retry.data.machinery_log_id, is_completed }
-      }
-    }
-    return { error: error.message }
+  const machineId = Number(formData.get('machine_id'))
+  const projectId = Number(formData.get('project_id'))
+  const date = String(formData.get('date') || new Date().toISOString().slice(0, 10))
+  const operatorName = String(formData.get('operator_name') || '').trim()
+  const rawStartTime = String(formData.get('start_time') || '')
+  const fuelLiters = Number(formData.get('fuel_liters')) || 0
+  const fuelPrice = Number(formData.get('fuel_price')) || null
+  if (!machineId || !projectId || !operatorName || fuelLiters < 0) return { error: 'Datos inválidos.' }
+  const [machine] = await db.select({ machineType: machinery.machineType, rate: machinery.expectedConsumptionRate }).from(machinery).where(eq(machinery.machineryId, machineId)).limit(1)
+  if (!machine) return { error: 'Maquinaria no encontrada.' }
+  const isMachine = machine.machineType !== 'truck'
+  const rate = Number(machine.rate) || 0
+  const hashId = createOpaqueToken(18)
+  try {
+    const [created] = await db.insert(machineryLogs).values({
+      machineId, projectId, date, operatorName,
+      startTime: isMachine ? null : (rawStartTime || new Date().toTimeString().slice(0, 5)),
+      fuelLiters: String(fuelLiters), fuelPrice: fuelPrice === null ? null : String(fuelPrice),
+      effectiveHours: isMachine && rate > 0 && fuelLiters ? String(Number((fuelLiters / rate).toFixed(2))) : null,
+      isCompleted: isMachine, status: isMachine ? 'completed' : 'started', hashId,
+    }).returning({ hashId: machineryLogs.hashId, logId: machineryLogs.machineryLogId, isCompleted: machineryLogs.isCompleted })
+    if (!created.isCompleted) (await cookies()).set(capabilityName(created.logId), hashId, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 28800 })
+    return { hash_id: created.hashId, log_id: created.logId, is_completed: created.isCompleted }
+  } catch (error) {
+    return { error: (error as { code?: string }).code === '23505' ? 'Esta máquina ya tiene un turno activo.' : 'No se pudo crear el registro.' }
   }
-
-  return { hash_id: data.hash_id, log_id: data.machinery_log_id, is_completed }
 }
 
-/**
- * Checks for any active (open) shift on a specific machine.
- * Includes Just-in-Time (JIT) 8-hour auto-close check for orphan shifts.
- */
+async function requireShiftCapability(logId: number) {
+  const [shift] = await db.select().from(machineryLogs).where(eq(machineryLogs.machineryLogId, logId)).limit(1)
+  const capability = (await cookies()).get(capabilityName(logId))?.value
+  if (!shift || !capability || capability !== shift.hashId) throw new Error('Unauthorized')
+  return shift
+}
+
 export async function getActiveShiftForMachine(machineId: number) {
-  const { data: shift, error } = await supabase
-    .from('machinery_logs')
-    .select(`
-      machinery_log_id,
-      machine_id,
-      project_id,
-      date,
-      operator_name,
-      start_time,
-      end_time,
-      fuel_liters,
-      fuel_price,
-      observations,
-      status,
-      pause_events,
-      total_paused_minutes,
-      created_at,
-      projects(project_name)
-    `)
-    .eq('machine_id', machineId)
-    .eq('is_completed', false)
-    .maybeSingle()
-
-  if (error || !shift) {
-    return { activeShift: null }
-  }
-
-  // JIT Orphan Shift Evaluation: Check if open shift exceeds 8 hours
-  const createdAtTime = new Date(shift.created_at).getTime()
-  const nowTime = Date.now()
-  const elapsedHours = (nowTime - createdAtTime) / (1000 * 60 * 60)
-
-  if (elapsedHours >= 8) {
-    // Automatically close orphan shift capped at start_time + 8h
-    const [sH, sM] = (shift.start_time || '08:00').split(':').map(Number)
-    const endH = (sH + 8) % 24
-    const calculatedEndTime = `${String(endH).padStart(2, '0')}:${String(sM || 0).padStart(2, '0')}`
-
-    await supabase
-      .from('machinery_logs')
-      .update({
-        is_completed: true,
-        status: 'completed',
-        auto_closed: true,
-        end_time: shift.end_time || calculatedEndTime,
-        observations: (shift.observations ? shift.observations + ' | ' : '') + '[Cierre automático: límite de 8 horas alcanzado]',
-      })
-      .eq('machinery_log_id', shift.machinery_log_id)
-
+  const [shift] = await db.select().from(machineryLogs).where(and(eq(machineryLogs.machineId, machineId), eq(machineryLogs.isCompleted, false))).limit(1)
+  if (!shift) return { activeShift: null }
+  if (shift.createdAt && Date.now() - shift.createdAt.getTime() >= 28800000) {
+    await db.update(machineryLogs).set({ isCompleted: true, status: 'completed', autoClosed: true, observations: sql`trim(coalesce(${machineryLogs.observations}, '') || ' [Cierre automático: límite de 8 horas alcanzado]')` }).where(eq(machineryLogs.machineryLogId, shift.machineryLogId))
     return { activeShift: null, wasOrphanClosed: true }
   }
-
-  return { activeShift: shift }
+  const capability = (await cookies()).get(capabilityName(shift.machineryLogId))?.value
+  return capability === shift.hashId ? { activeShift: shift } : { activeShift: null, occupied: true }
 }
 
-/**
- * Pauses an active shift, recording the timestamp and pause reason into pause_events timeseries.
- */
 export async function pauseShift(logId: number, reason: string, notes?: string) {
-  const { data: shift, error: fetchErr } = await supabase
-    .from('machinery_logs')
-    .select('pause_events, status, is_completed')
-    .eq('machinery_log_id', logId)
-    .single()
-
-  if (fetchErr || !shift || shift.is_completed) {
-    return { error: 'Turno no encontrado o ya completado.' }
-  }
-
-  if (shift.status === 'paused') {
-    return { error: 'El turno ya se encuentra en pausa.' }
-  }
-
-  const currentEvents = Array.isArray(shift.pause_events) ? shift.pause_events : []
-  const newEvent = {
-    paused_at: new Date().toISOString(),
-    unpaused_at: null,
-    reason,
-    notes: notes || '',
-  }
-
-  const updatedEvents = [...currentEvents, newEvent]
-
-  const { error: updateErr } = await supabase
-    .from('machinery_logs')
-    .update({
-      status: 'paused',
-      pause_events: updatedEvents,
-    })
-    .eq('machinery_log_id', logId)
-
-  if (updateErr) {
-    return { error: updateErr.message }
-  }
-
+  const shift = await requireShiftCapability(logId)
+  if (shift.isCompleted || shift.status === 'paused') return { error: 'Turno no disponible para pausa.' }
+  const events = Array.isArray(shift.pauseEvents) ? shift.pauseEvents : []
+  await db.update(machineryLogs).set({ status: 'paused', pauseEvents: [...events, { paused_at: new Date().toISOString(), unpaused_at: null, reason, notes: notes || '' }] }).where(and(eq(machineryLogs.machineryLogId, logId), eq(machineryLogs.isCompleted, false)))
   return { success: true }
 }
 
-/**
- * Resumes a paused shift, recording unpaused_at timestamp and accumulating duration into total_paused_minutes.
- */
 export async function resumeShift(logId: number) {
-  const { data: shift, error: fetchErr } = await supabase
-    .from('machinery_logs')
-    .select('pause_events, status, is_completed, total_paused_minutes')
-    .eq('machinery_log_id', logId)
-    .single()
-
-  if (fetchErr || !shift || shift.is_completed) {
-    return { error: 'Turno no encontrado o ya completado.' }
+  const shift = await requireShiftCapability(logId)
+  if (shift.isCompleted || shift.status !== 'paused') return { error: 'El turno no está pausado.' }
+  const events = Array.isArray(shift.pauseEvents) ? [...shift.pauseEvents] as Array<Record<string, unknown>> : []
+  const last = events.at(-1); let minutes = 0
+  if (last && !last.unpaused_at) {
+    minutes = Math.max(1, Math.round((Date.now() - new Date(String(last.paused_at)).getTime()) / 60000))
+    events[events.length - 1] = { ...last, unpaused_at: new Date().toISOString(), duration_minutes: minutes }
   }
-
-  if (shift.status !== 'paused') {
-    return { error: 'El turno no está pausado actualmente.' }
-  }
-
-  const currentEvents = Array.isArray(shift.pause_events) ? [...shift.pause_events] : []
-  const lastIdx = currentEvents.length - 1
-  let additionalMinutes = 0
-
-  if (lastIdx >= 0 && !currentEvents[lastIdx].unpaused_at) {
-    const now = new Date()
-    const pausedAt = new Date(currentEvents[lastIdx].paused_at)
-    additionalMinutes = Math.max(1, Math.round((now.getTime() - pausedAt.getTime()) / 60000))
-
-    currentEvents[lastIdx] = {
-      ...currentEvents[lastIdx],
-      unpaused_at: now.toISOString(),
-      duration_minutes: additionalMinutes,
-    }
-  }
-
-  const totalMinutes = (shift.total_paused_minutes || 0) + additionalMinutes
-
-  const { error: updateErr } = await supabase
-    .from('machinery_logs')
-    .update({
-      status: 'started',
-      pause_events: currentEvents,
-      total_paused_minutes: totalMinutes,
-    })
-    .eq('machinery_log_id', logId)
-
-  if (updateErr) {
-    return { error: updateErr.message }
-  }
-
+  await db.update(machineryLogs).set({ status: 'started', pauseEvents: events, totalPausedMinutes: shift.totalPausedMinutes + minutes }).where(and(eq(machineryLogs.machineryLogId, logId), eq(machineryLogs.status, 'paused')))
   return { success: true }
 }
 
-/**
- * Completes and closes an active shift, sealing any ongoing pause and updating end_time and observations.
- */
 export async function completeShift(logId: number, endTime?: string, observations?: string) {
-  const { data: shift, error: fetchErr } = await supabase
-    .from('machinery_logs')
-    .select('pause_events, status, is_completed, total_paused_minutes, observations')
-    .eq('machinery_log_id', logId)
-    .single()
-
-  if (fetchErr || !shift || shift.is_completed) {
-    return { error: 'Turno no encontrado o ya completado.' }
-  }
-
-  let currentEvents = Array.isArray(shift.pause_events) ? [...shift.pause_events] : []
-  let totalMinutes = shift.total_paused_minutes || 0
-
-  // If currently paused, seal the open pause interval
-  if (shift.status === 'paused' && currentEvents.length > 0) {
-    const lastIdx = currentEvents.length - 1
-    if (!currentEvents[lastIdx].unpaused_at) {
-      const now = new Date()
-      const pausedAt = new Date(currentEvents[lastIdx].paused_at)
-      const additionalMinutes = Math.max(1, Math.round((now.getTime() - pausedAt.getTime()) / 60000))
-      currentEvents[lastIdx] = {
-        ...currentEvents[lastIdx],
-        unpaused_at: now.toISOString(),
-        duration_minutes: additionalMinutes,
-      }
-      totalMinutes += additionalMinutes
-    }
-  }
-
-  const calculatedEndTime = endTime || new Date().toTimeString().slice(0, 5)
-  const combinedObservations = observations
-    ? (shift.observations ? `${shift.observations} | ${observations}` : observations)
-    : shift.observations
-
-  const { error: updateErr } = await supabase
-    .from('machinery_logs')
-    .update({
-      status: 'completed',
-      is_completed: true,
-      end_time: calculatedEndTime,
-      pause_events: currentEvents,
-      total_paused_minutes: totalMinutes,
-      observations: combinedObservations,
-    })
-    .eq('machinery_log_id', logId)
-
-  if (updateErr) {
-    return { error: updateErr.message }
-  }
-
+  const shift = await requireShiftCapability(logId)
+  if (shift.isCompleted) return { error: 'El turno ya está completado.' }
+  await db.update(machineryLogs).set({ status: 'completed', isCompleted: true, endTime: endTime || new Date().toTimeString().slice(0, 5), observations: observations ? [shift.observations, observations].filter(Boolean).join(' | ') : shift.observations }).where(and(eq(machineryLogs.machineryLogId, logId), eq(machineryLogs.isCompleted, false)))
+  ;(await cookies()).delete(capabilityName(logId))
   return { success: true }
 }
 
-/**
- * Manual fallback action / CLI runner to close all shifts exceeding the 8-hour limit.
- */
 export async function closeOrphanShiftsManually() {
-  const cutoff = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString()
-
-  const { data, error } = await supabase
-    .from('machinery_logs')
-    .update({
-      is_completed: true,
-      status: 'completed',
-      auto_closed: true,
-      observations: '[Cierre automático: límite de 8 horas alcanzado]',
-    })
-    .eq('is_completed', false)
-    .lt('created_at', cutoff)
-    .select('machinery_log_id')
-
-  if (error) {
-    console.error('Error closing orphan shifts manually:', error)
-    return { error: error.message }
-  }
-
-  return { closedCount: data?.length || 0 }
+  await requireRole('admin')
+  const closed = await db.update(machineryLogs).set({ isCompleted: true, status: 'completed', autoClosed: true, observations: '[Cierre automático: límite de 8 horas alcanzado]' }).where(and(eq(machineryLogs.isCompleted, false), lt(machineryLogs.createdAt, new Date(Date.now() - 28800000)))).returning({ id: machineryLogs.machineryLogId })
+  return { closedCount: closed.length }
 }

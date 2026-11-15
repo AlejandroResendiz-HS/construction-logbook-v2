@@ -1,117 +1,14 @@
 'use server'
-
-import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { asc, eq } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
+import { requireRole } from '@/lib/authorization'
+import { db } from '@/lib/db'
+import { machinery } from '@/lib/db/schema'
 
-const supabaseAdmin = createSupabaseClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-export async function createMachinery(formData: FormData) {
-  const external_code = formData.get('external_code') as string
-  const machinery_full_name = formData.get('machinery_full_name') as string
-  const machinery_name = formData.get('machinery_name') as string
-  const machinery_model = formData.get('machinery_model') as string
-  const machinery_serial_code = formData.get('machinery_serial_code') as string
-  const observations = formData.get('observations') as string
-  const is_rented = formData.get('is_rented') === 'true'
-  const machine_type = (formData.get('machine_type') as string) || 'machine'
-
-  const rawRate = formData.get('expected_consumption_rate')
-  const expected_consumption_rate = rawRate && !isNaN(parseFloat(rawRate as string))
-    ? parseFloat(rawRate as string)
-    : null
-
-  const { data, error } = await supabaseAdmin
-    .from('machinery')
-    .insert([{ 
-      external_code, 
-      machinery_full_name, 
-      machinery_name, 
-      machinery_model, 
-      machinery_serial_code,
-      observations,
-      is_rented,
-      machine_type,
-      expected_consumption_rate
-    }])
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating machinery:', error)
-    if (error.code === '23505') {
-      if (error.message.includes('external_code')) {
-        return { error: 'DUPLICATE_EXTERNAL_CODE' }
-      }
-      return { error: 'DUPLICATE_IDENTITY' }
-    }
-    return { error: 'GENERIC_ERROR' }
-  }
-
-  revalidatePath('/machinery')
-  return { success: true, machine: data }
-}
-
-export async function updateMachinery(machinery_id: number, formData: FormData) {
-  const external_code = formData.get('external_code') as string
-  const machinery_full_name = formData.get('machinery_full_name') as string
-  const machinery_name = formData.get('machinery_name') as string
-  const machinery_model = formData.get('machinery_model') as string
-  const machinery_serial_code = formData.get('machinery_serial_code') as string
-  const observations = formData.get('observations') as string
-  const is_rented = formData.get('is_rented') === 'true'
-  const machine_type = (formData.get('machine_type') as string) || 'machine'
-
-  const rawRate = formData.get('expected_consumption_rate')
-  const expected_consumption_rate = rawRate && !isNaN(parseFloat(rawRate as string))
-    ? parseFloat(rawRate as string)
-    : null
-
-  const { data, error } = await supabaseAdmin
-    .from('machinery')
-    .update({ 
-      external_code, 
-      machinery_full_name, 
-      machinery_name, 
-      machinery_model, 
-      machinery_serial_code,
-      observations,
-      is_rented,
-      machine_type,
-      expected_consumption_rate
-    })
-    .eq('machinery_id', machinery_id)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error updating machinery:', error)
-    if (error.code === '23505') {
-      if (error.message.includes('external_code')) {
-        return { error: 'DUPLICATE_EXTERNAL_CODE' }
-      }
-      return { error: 'DUPLICATE_IDENTITY' }
-    }
-    return { error: 'GENERIC_ERROR' }
-  }
-
-  revalidatePath('/machinery')
-  return { success: true, machine: data }
-}
-
-export async function deleteMachinery(machinery_id: number) {
-  const { error } = await supabaseAdmin
-    .from('machinery')
-    .delete()
-    .eq('machinery_id', machinery_id)
-
-  if (error) {
-    console.error('Error deleting machinery:', error)
-    return { error: 'GENERIC_ERROR' }
-  }
-
-  revalidatePath('/machinery')
-  return { success: true }
-}
+const view = { machinery_id: machinery.machineryId, external_code: machinery.externalCode, machinery_full_name: machinery.machineryFullName, machinery_name: machinery.machineryName, machinery_model: machinery.machineryModel, machinery_serial_code: machinery.machinerySerialCode, observations: machinery.observations, is_rented: machinery.isRented, machine_type: machinery.machineType, expected_consumption_rate: machinery.expectedConsumptionRate, created_at: machinery.createdAt }
+export async function listMachinery() { await requireRole('admin'); return db.select(view).from(machinery).orderBy(asc(machinery.machineryFullName)) }
+function values(formData: FormData) { const rate = String(formData.get('expected_consumption_rate') || ''); return { externalCode: String(formData.get('external_code') || '').trim(), machineryFullName: String(formData.get('machinery_full_name') || '').trim(), machineryName: String(formData.get('machinery_name') || '') || null, machineryModel: String(formData.get('machinery_model') || '') || null, machinerySerialCode: String(formData.get('machinery_serial_code') || '') || null, observations: String(formData.get('observations') || '') || null, isRented: formData.get('is_rented') === 'true', machineType: String(formData.get('machine_type') || 'machine'), expectedConsumptionRate: rate && !Number.isNaN(Number(rate)) ? rate : null } }
+function dbError(e: unknown) { const error = e as { code?: string; constraint?: string }; return error.code === '23505' ? (error.constraint?.includes('external') ? 'DUPLICATE_EXTERNAL_CODE' : 'DUPLICATE_IDENTITY') : 'GENERIC_ERROR' }
+export async function createMachinery(formData: FormData) { await requireRole('admin'); try { const [row] = await db.insert(machinery).values(values(formData)).returning(view); revalidatePath('/machinery'); return { success: true, machine: row } } catch (e) { return { error: dbError(e) } } }
+export async function updateMachinery(id: number, formData: FormData) { await requireRole('admin'); try { const [row] = await db.update(machinery).set(values(formData)).where(eq(machinery.machineryId, id)).returning(view); revalidatePath('/machinery'); return { success: true, machine: row } } catch (e) { return { error: dbError(e) } } }
+export async function deleteMachinery(id: number) { await requireRole('admin'); try { await db.delete(machinery).where(eq(machinery.machineryId, id)); revalidatePath('/machinery'); return { success: true } } catch { return { error: 'GENERIC_ERROR' } } }

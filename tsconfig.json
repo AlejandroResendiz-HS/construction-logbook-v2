@@ -21,7 +21,6 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@/supabase/*": ["./supabase/*"],
       "@/lib/*": ["./lib/*"]
     }
   },

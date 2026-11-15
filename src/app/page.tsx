@@ -1,24 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
+import { asc } from 'drizzle-orm'
+import { db } from '@/lib/db'
+import { machinery as machineryTable, projects as projectsTable } from '@/lib/db/schema'
 import { getDictionary } from '@/lib/i18n'
 import MachineryLogForm from '@/components/MachineryLogForm'
 
 export default async function NewLogPage() {
   const dict = getDictionary('es')
-  const supabase = await createClient()
-
-  const { data: machinery, error: machError } = await supabase
-    .from('machinery')
-    .select('machinery_id, machinery_full_name, machinery_serial_code, machine_type, expected_consumption_rate')
-    .order('machinery_full_name', { ascending: true })
-
-  const { data: projects, error: projError } = await supabase
-    .from('projects')
-    .select('project_id, project_name')
-    .order('project_name', { ascending: true })
-
-  if (machError || projError) {
-    console.error('Error fetching data:', machError || projError)
-  }
+  const [machinery, projects] = await Promise.all([
+    db.select({ machinery_id: machineryTable.machineryId, machinery_full_name: machineryTable.machineryFullName, machinery_serial_code: machineryTable.machinerySerialCode, machine_type: machineryTable.machineType, expected_consumption_rate: machineryTable.expectedConsumptionRate }).from(machineryTable).orderBy(asc(machineryTable.machineryFullName)),
+    db.select({ project_id: projectsTable.projectId, project_name: projectsTable.projectName }).from(projectsTable).orderBy(asc(projectsTable.projectName)),
+  ])
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">

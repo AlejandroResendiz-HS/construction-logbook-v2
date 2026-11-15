@@ -1,4 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireRole } from '@/lib/authorization'
+import { getMachinery, getProjects } from '@/lib/queries'
 import { getDictionary } from '@/lib/i18n'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -7,16 +8,8 @@ import LogoutButton from '@/components/LogoutButton'
 
 export default async function LogbookPage() {
   const dict = getDictionary('es')
-  const supabase = await createClient()
-
-  // Correct server-side user check for Next.js App Router
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
-  }
-
-  const { data: machinery } = await supabase.from('machinery').select('*')
-  const { data: projects } = await supabase.from('projects').select('project_id, project_name').order('project_name', { ascending: true })
+  await requireRole('admin', 'resident').catch(() => redirect('/login'))
+  const [machinery, projects] = await Promise.all([getMachinery(), getProjects()])
 
   return (
     <main className="p-4 md:p-8">
@@ -24,7 +17,7 @@ export default async function LogbookPage() {
         <header className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">{dict.admin.dashboard_title}</h1>
-            <Link href="/app/log/correct" className="text-sm text-blue-600 hover:underline">
+            <Link href="/log/correct" className="text-sm text-blue-600 hover:underline">
               {dict.admin.correction.title}
             </Link>
           </div>

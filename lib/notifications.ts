@@ -46,3 +46,14 @@ export async function sendMaintenanceWhatsAppNotification(request: any) {
   console.log('WhatsApp notification logic to be implemented here');
   return { success: true };
 }
+
+export async function sendPasswordResetEmail(email: string, url: string) {
+  if (!ADMIN_EMAIL && !email) return { success: false, error: 'Missing recipient' }
+  const { data, error } = await resend.emails.send({
+    from: ORIGIN_EMAIL,
+    to: [email],
+    subject: 'Restablecer contraseña de SIGMA',
+    html: `<p>Recibimos una solicitud para restablecer tu contraseña.</p><p><a href="${url}">Restablecer contraseña</a></p><p>Si no fuiste vos, ignorá este correo.</p>`,
+  })
+  return error ? { success: false, error } : { success: true, data }
+}

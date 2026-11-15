@@ -4,6 +4,7 @@ import "./globals.css";
 import Navbar from "@/components/Navbar";
 import { getDictionary } from "@/lib/i18n";
 import { Toaster } from 'sonner';
+import { getSession } from '@/lib/authorization';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -20,12 +21,13 @@ export const metadata: Metadata = {
   description: "SIGMA Machinery Logbook",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const dict = getDictionary('es');
+  const session = await getSession();
 
   return (
     <html
@@ -34,7 +36,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col bg-gray-50 text-gray-900">
         <Toaster richColors position="top-right" />
-        <Navbar dict={dict} />
+        <Navbar dict={dict} initialUser={session ? { id: session.user.id } : null} initialRole={session?.user.role ?? null} />
         <div className="flex-1">
           {children}
         </div>

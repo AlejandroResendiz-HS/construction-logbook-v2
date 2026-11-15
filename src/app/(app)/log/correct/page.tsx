@@ -1,16 +1,11 @@
 import { getDictionary } from '@/lib/i18n'
 import CorrectionLogForm from '@/components/CorrectionLogForm'
-import { createClient } from '@/lib/supabase/server'
+import { requireRole } from '@/lib/authorization'
 import { redirect } from 'next/navigation'
 
 export default async function AdminUpdateLogPage() {
   const dict = getDictionary('es')
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
-  }
+  await requireRole('admin', 'resident').catch(() => redirect('/login'))
 
   return (
     <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">

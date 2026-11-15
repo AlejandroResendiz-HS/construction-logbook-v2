@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { supabase } from '@/lib/supabase'
+import { listProjects } from '@/app/(app)/projects/actions'
 
 interface ProjectsState {
   projects: any[]
@@ -15,11 +15,8 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
   loading: false,
   fetchProjects: async () => {
     set({ loading: true })
-    const { data } = await supabase
-      .from('projects')
-      .select('*')
-      .order('project_name', { ascending: true })
-    set({ projects: data || [], loading: false })
+    const data = await listProjects()
+    set({ projects: data, loading: false })
   },
   addProject: (project) => 
     set((state) => ({ projects: [...state.projects, project].sort((a, b) => a.project_name.localeCompare(b.project_name)) })),
