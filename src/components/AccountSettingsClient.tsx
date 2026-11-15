@@ -16,6 +16,9 @@ export default function AccountSettingsClient({
   // ── Shared state ──────────────────────────────────────────────────────────
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatarUrl)
   const [avatarCacheBuster, setAvatarCacheBuster] = useState(0)
+  const avatarSrc = avatarUrl
+    ? `${avatarUrl}${avatarUrl.includes('?') ? '&' : '?'}t=${avatarCacheBuster}`
+    : null
 
   // ── Section A: Profile Picture ────────────────────────────────────────────
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
@@ -115,9 +118,9 @@ export default function AccountSettingsClient({
 
         {/* Current avatar preview */}
         <div className="flex items-center gap-4">
-          {avatarUrl ? (
+          {avatarSrc ? (
             <img
-              src={`${avatarUrl}&t=${avatarCacheBuster}`}
+              src={avatarSrc}
               alt="Avatar"
               className="h-20 w-20 rounded-full object-cover"
               onError={() => setAvatarUrl(null)}
