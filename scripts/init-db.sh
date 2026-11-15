@@ -14,6 +14,21 @@ for identifier in "$DB_NAME" "$DB_USER"; do
   fi
 done
 
+# Start PostgreSQL if it isn't running
+if ! sudo systemctl is-active --quiet postgresql; then
+  echo "Starting PostgreSQL..."
+  sudo systemctl start postgresql
+fi
+
+# Verify PostgreSQL accepts connections
+if ! sudo -u postgres psql -d postgres \
+  -v ON_ERROR_STOP=1 -c "SELECT 1" > /dev/null; then
+  echo "PostgreSQL is not accepting connections." >&2
+  exit 1
+fi
+
+echo "PostgreSQL is ready."
+
 # Create role if it doesn't exist
 sudo -u postgres psql \
   -v ON_ERROR_STOP=1 \

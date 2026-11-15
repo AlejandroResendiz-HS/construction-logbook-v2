@@ -120,6 +120,13 @@ Never commit real credentials.
 
 2. Create an empty PostgreSQL database and configure `.env.local`. You can use the script at `scripts/init-db.sh`.
 
+   ```bash
+   DB_NAME=<DATABASE_NAME> \
+   DB_USER=<DATABASE_USER> \
+   DB_PASSWORD='<DATABASE_PASSWORD>' \
+   ./scripts/init-db.sh
+   ```
+
 3. Apply migrations and seed required catalog data:
 
    ```bash
