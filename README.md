@@ -182,6 +182,20 @@ The default remains below Vercel's 4.5 MB Function request/response limit. A sta
 
 PostgreSQL binary storage increases database size, backup duration, memory pressure, and restore time. It is appropriate for modest proof-of-concept files, not large media archives.
 
+## Testing
+
+The current unit suite runs pure business logic in Vitest's Node environment:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run test:unit` | Run the named unit project once |
+| `npm run test:unit:watch` | Run the unit project in watch mode |
+| `npm run test:unit:coverage` | Run unit tests with text, HTML, and LCOV coverage reports |
+
+Global coverage thresholds are 80% statements, 80% lines, 80% functions, and 70% branches. Coverage currently applies only to `lib/security.ts`; its scope must expand alongside newly extracted, unit-testable business logic.
+
+`npm run test:integration` and `npm run test:e2e` are deliberate failing placeholders. Integration tests will require an isolated PostgreSQL database through `TEST_DATABASE_URL`, while E2E tests will eventually require a browser runner such as Playwright.
+
 ## Validation commands
 
 ```bash
