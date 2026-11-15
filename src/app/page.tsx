@@ -1,0 +1,39 @@
+import { createClient } from '@/lib/supabase/server'
+import { getDictionary } from '@/lib/i18n'
+import MachineryLogForm from '@/components/MachineryLogForm'
+
+export default async function NewLogPage() {
+  const dict = getDictionary('es')
+  const supabase = await createClient()
+
+  const { data: machinery, error: machError } = await supabase
+    .from('machinery')
+    .select('machinery_id, machinery_full_name, machinery_serial_code, machine_type, expected_consumption_rate')
+    .order('machinery_full_name', { ascending: true })
+
+  const { data: projects, error: projError } = await supabase
+    .from('projects')
+    .select('project_id, project_name')
+    .order('project_name', { ascending: true })
+
+  if (machError || projError) {
+    console.error('Error fetching data:', machError || projError)
+  }
+
+  return (
+    <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-xl shadow-lg overflow-hidden">
+        <div className="p-6">
+          <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+            {dict.new_log.title}
+          </h1>
+          <MachineryLogForm 
+            machinery={machinery || []} 
+            projects={projects || []} 
+            dict={dict.new_log}
+          />
+        </div>
+      </div>
+    </main>
+  )
+}
