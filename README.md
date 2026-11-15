@@ -118,7 +118,7 @@ Never commit real credentials.
    npm install
    ```
 
-2. Create an empty PostgreSQL database and configure `.env.local`.
+2. Create an empty PostgreSQL database and configure `.env.local`. You can use the script at `scripts/init-db.sh`.
 
 3. Apply migrations and seed required catalog data:
 
