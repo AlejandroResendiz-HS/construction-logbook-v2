@@ -118,6 +118,12 @@ Never commit real credentials.
    npm install
    ```
 
+   > Note: to preserve existing package versions in `package-lock.json`, please use the following command 
+
+   ```bash
+   npm ci
+   ```
+
 2. Create an empty PostgreSQL database and configure `.env.local`. You can use the script at `scripts/init-db.sh`.
 
    ```bash
