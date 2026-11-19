@@ -1,20 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import { getDictionary } from "@/lib/i18n";
 import { Toaster } from 'sonner';
 import { getSession } from '@/lib/authorization';
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "HIV Logbook",
@@ -30,10 +19,7 @@ export default async function RootLayout({
   const session = await getSession();
 
   return (
-    <html
-      lang="es"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
+    <html lang="es" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-gray-50 text-gray-900">
         <Toaster richColors position="top-right" />
         <Navbar dict={dict} initialUser={session ? { id: session.user.id } : null} initialRole={session?.user.role ?? null} />

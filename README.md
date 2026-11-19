@@ -115,14 +115,16 @@ Never commit real credentials.
 1. Install dependencies:
 
    ```bash
-   npm install
+   npm install --legacy-peer-deps
    ```
 
-   > Note: to preserve package versions listed in `package-lock.json`, please use the following command instead 
+   Alternatively, to preserve package versions listed in `package-lock.json`, please use the following command instead 
 
    ```bash
-   npm ci
+   npm ci --legacy-peer-deps 
    ```
+
+   > *Note*: using `--legacy-peer-deps` parameter to supress errors on strict peer dependency resolution 
 
 2. Create an empty PostgreSQL database and configure `.env.local`. You can use the script at `scripts/init-db.sh`.
 
