@@ -118,7 +118,7 @@ Never commit real credentials.
    npm install
    ```
 
-   > Note: to preserve existing package versions in `package-lock.json`, please use the following command 
+   > Note: to preserve package versions listed in `package-lock.json`, please use the following command instead 
 
    ```bash
    npm ci
